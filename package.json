@@ -1,0 +1,7 @@
+{
+  "name": "water-station-backend",
+  "version": "1.0.0",
+  "dependencies": {
+    "xendit-node": "^3.9.0"
+  }
+}
