@@ -66,30 +66,22 @@ export default async function handler(req, res) {
     console.log(`✅ Firebase updated for: ${orderId}`);
     
     // 5. Jika pembayaran sukses, kirim command ke ESP32
-    const successStatuses = ['PAID', 'SETTLED', 'SUCCEEDED', 'COMPLETED'];
-    if (successStatuses.includes(status)) {
-      const transactionRes = await fetch(firebaseUrl);
-      const transactionData = await transactionRes.json();
-      
-      if (transactionData) {
-        const commandUrl = 'https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/devices/WS-001/command.json';
-        
-        await fetch(commandUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            orderId: orderId,
-            status: "pending",
-            type: "fill_water",
-            volume: transactionData.volume || 1,
-            amount: transactionData.amount || amount,
-            timestamp: Date.now()
-          })
-        });
-        
-        console.log(`🚰 Command sent to ESP32 for order: ${orderId}`);
-      }
-    }
+    await fetch(commandUrl, {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    currentOrder: orderId,      // Pakai field yang ada
+    deviceId: "WS-001",         // Tambahkan field yang diperlukan
+    status: "pending",          // Tambahkan status
+    type: "fill_water",         // Tambahkan type
+    volume: transactionData.volume || 1,
+    amount: transactionData.amount || amount,
+    timestamp: Date.now(),
+    // Pertahankan field yang sudah ada jika perlu
+    fillProgress: 0,            // Reset progress
+    relayActive: true           // Aktifkan relay
+  })
+});
     
     // 6. Response ke Xendit
     res.status(200).json({ 
