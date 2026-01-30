@@ -1,4 +1,4 @@
-// api/webhook.js - FIXED VERSION
+// api/webhook.js - FINAL FIXED VERSION
 export default async function handler(req, res) {
   // 1. Validasi method
   if (req.method !== 'POST') {
@@ -16,50 +16,58 @@ export default async function handler(req, res) {
   
   try {
     const webhookData = req.body;
-    console.log('📬 Webhook data:', JSON.stringify(webhookData, null, 2));
+    console.log('📬 Webhook event:', webhookData.event);
     
-    // 3. Extract data berdasarkan struktur Xendit
-    let external_id, status;
+    // 3. Extract data berdasarkan event type
+    let orderId, status, amount;
+    const event = webhookData.event;
     
-    // Struktur berbeda-beda tergantung event type
-    if (webhookData.external_id) {
-      // Untuk payment.paid, payment.expired
-      external_id = webhookData.external_id;
-      status = webhookData.status;
-    } else if (webhookData.data && webhookData.data.external_id) {
-      // Untuk struktur nested
-      external_id = webhookData.data.external_id;
-      status = webhookData.data.status || webhookData.status;
-    } else if (webhookData.id) {
-      // Alternatif: gunang id sebagai external_id
-      external_id = webhookData.id;
-      status = webhookData.status;
+    if (webhookData.data) {
+      // Ambil dari data.reference_id (ini yang kita set sebagai external_id)
+      orderId = webhookData.data.reference_id;
+      status = webhookData.data.status;
+      amount = webhookData.data.amount || webhookData.data.request_amount;
+      
+      // Fallback: jika tidak ada reference_id, coba payment_request_id
+      if (!orderId && webhookData.data.payment_request_id) {
+        orderId = webhookData.data.payment_request_id;
+      }
     }
     
-    if (!external_id) {
-      console.log('⚠️ No external_id found in webhook:', webhookData);
-      return res.status(200).json({ received: true, note: 'No external_id' });
+    // Log untuk debugging
+    console.log('🔍 Extracted data:', { orderId, status, amount, event });
+    
+    if (!orderId) {
+      console.log('⚠️ No orderId found, but webhook received:', event);
+      return res.status(200).json({ 
+        received: true, 
+        event: event,
+        note: 'No orderId found for this event type' 
+      });
     }
     
-    console.log(`📬 Webhook: ${external_id} - ${status}`);
+    console.log(`📬 Processing: ${orderId} - ${status} (${event})`);
     
     // 4. Update Firebase transaction status
-    const firebaseUrl = `https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/transactions/${external_id}.json`;
+    const firebaseUrl = `https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/transactions/${orderId}.json`;
     
     await fetch(firebaseUrl, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         paymentStatus: status,
+        event: event,
+        amount: amount,
         updatedAt: Date.now(),
         webhookReceived: true
       })
     });
     
-    console.log(`✅ Firebase updated for: ${external_id}`);
+    console.log(`✅ Firebase updated for: ${orderId}`);
     
     // 5. Jika pembayaran sukses, kirim command ke ESP32
-    if (status === 'PAID' || status === 'SETTLED') {
+    const successStatuses = ['PAID', 'SETTLED', 'SUCCEEDED', 'COMPLETED'];
+    if (successStatuses.includes(status)) {
       const transactionRes = await fetch(firebaseUrl);
       const transactionData = await transactionRes.json();
       
@@ -70,24 +78,26 @@ export default async function handler(req, res) {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            orderId: external_id,
+            orderId: orderId,
             status: "pending",
             type: "fill_water",
             volume: transactionData.volume || 1,
-            amount: transactionData.amount,
+            amount: transactionData.amount || amount,
             timestamp: Date.now()
           })
         });
         
-        console.log(`🚰 Command sent to ESP32 for order: ${external_id}`);
+        console.log(`🚰 Command sent to ESP32 for order: ${orderId}`);
       }
     }
     
     // 6. Response ke Xendit
     res.status(200).json({ 
       success: true, 
-      message: 'Webhook processed',
-      external_id: external_id
+      message: 'Webhook processed successfully',
+      orderId: orderId,
+      status: status,
+      event: event
     });
     
   } catch (error) {
@@ -95,7 +105,8 @@ export default async function handler(req, res) {
     
     res.status(200).json({ 
       success: false, 
-      error: error.message
+      error: error.message,
+      note: 'Error logged but Xendit notified'
     });
   }
 }
