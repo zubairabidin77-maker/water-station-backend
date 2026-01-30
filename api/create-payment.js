@@ -1,9 +1,14 @@
-
-// api/create-payment.js - FIXED
+// api/create-payment.js
 import Xendit from 'xendit-node';
 
+const xendit = new Xendit({
+  secretKey: process.env.XENDIT_SECRET_KEY
+});
+const { Invoice } = xendit;
+
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Set CORS headers
+  res.setHeader('Access-Control-Allow-Origin', 'https://water-station-zubair.web.app');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
@@ -16,70 +21,88 @@ export default async function handler(req, res) {
   }
   
   try {
-    const { orderId, amount, volume, customer, paymentMethod } = req.body;
+    const { external_id, amount, payer_email, description, volume } = req.body;
     
-    const xendit = new Xendit({
-      secretKey: process.env.XENDIT_SECRET_KEY,
-    });
+    // 1. Validasi input
+    if (!external_id || !amount || !volume) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required fields' 
+      });
+    }
     
-    const { Invoice } = xendit;
-    const invoice = new Invoice({});
+    // 2. Simpan ke Firebase dulu
+    const firebaseUrl = `https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/transactions/${external_id}.json`;
     
-    const invoiceData = await invoice.createInvoice({
-      externalId: orderId,
+    const transactionData = {
+      orderId: external_id,
       amount: amount,
-      description: 'Air Minum ' + volume + 'ml',
-      currency: 'IDR',
-      payerEmail: customer?.email || 'customer@waterstation.com',
-      customer: {
-        givenNames: customer?.name || 'Customer',
-        email: customer?.email || '',
-        mobileNumber: customer?.phone || ''
-      },
-      items: [{
-        name: 'Air Minum ' + volume + 'ml',
-        quantity: 1,
-        price: amount,
-        category: 'Food & Beverage'
-      }],
-      paymentMethods: paymentMethod ? [paymentMethod] : ['QRIS'],
-      successRedirectUrl: 'https://water-station-zubair.web.app/payment/success.html',
-      failureRedirectUrl: 'https://water-station-zubair.web.app/payment/failed.html',
-      invoiceDuration: 86400
-    });
-    
-    const firebaseUrl = 'https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/transactions/' + orderId + '.json';
+      volume: volume,
+      description: description || `Beli ${volume}ml air`,
+      status: 'pending',
+      email: payer_email,
+      createdAt: Date.now(),
+      paymentStatus: 'PENDING'
+    };
     
     await fetch(firebaseUrl, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        orderId,
-        amount,
-        volume,
-        status: 'pending',
-        xenditInvoiceId: invoiceData.id,
-        invoiceUrl: invoiceData.invoiceUrl,
-        expiryDate: invoiceData.expiryDate,
-        customer: customer || {},
-        createdAt: Date.now()
-      })
+      body: JSON.stringify(transactionData)
     });
     
+    // 3. Buat invoice di Xendit
+    const invoice = new Invoice({});
+    
+    const invoiceData = {
+      external_id: external_id,
+      amount: amount,
+      payer_email: payer_email || 'customer@waterstation.com',
+      description: description || `Pembayaran air ${volume}ml`,
+      currency: 'IDR',
+      success_redirect_url: 'https://water-station-zubair.web.app/success',
+      failure_redirect_url: 'https://water-station-zubair.web.app/failed',
+      items: [
+        {
+          name: `Air ${volume}ml`,
+          quantity: 1,
+          price: amount,
+          category: 'Water'
+        }
+      ],
+      customer: {
+        email: payer_email || 'customer@waterstation.com'
+      },
+      fees: [
+        {
+          type: 'ADMIN',
+          value: 0
+        }
+      ]
+    };
+    
+    const createdInvoice = await invoice.createInvoice(invoiceData);
+    
+    // 4. Response dengan data invoice
     res.status(200).json({
       success: true,
-      invoiceId: invoiceData.id,
-      invoiceUrl: invoiceData.invoiceUrl,
-      expiryDate: invoiceData.expiryDate,
-      orderId: orderId
+      invoice_id: createdInvoice.id,
+      invoice_url: createdInvoice.invoice_url,
+      expiry_date: createdInvoice.expiry_date,
+      amount: createdInvoice.amount,
+      status: createdInvoice.status,
+      external_id: createdInvoice.external_id,
+      // Untuk QRIS
+      qr_code: createdInvoice.available_banks?.find(b => b.bank_code === 'QRIS')?.qr_code || null,
+      message: 'Invoice created successfully'
     });
     
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    console.error('Create payment error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Failed to create payment'
     });
   }
 }
-
