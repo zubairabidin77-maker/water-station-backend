@@ -1,103 +1,139 @@
-// AWAL FILE - CORS MIDDLEWARE
+// api/check-status.js - CHECK PAYMENT STATUS
+import fetch from 'node-fetch';
+
 export default async function handler(req, res) {
-  // ========== CORS HEADERS ==========
-  const allowedOrigins = [
-    'https://water-station-zubair.web.app',
-    'https://water-station-zubair.firebaseapp.com',
-    'http://localhost:5000',
-    'http://localhost:3000'
-  ];
-  
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-callback-token');
-  
-  // ========== HANDLE PREFLIGHT ==========
-  if (req.method === 'OPTIONS') {
-    console.log('🔄 OPTIONS preflight request');
-    return res.status(200).end();
-  }
-  // api/check-status.js - CHECK PAYMENT STATUS
-export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', 'https://water-station-zubair.web.app');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  const { payment_id } = req.query;
-  
-  if (!payment_id) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'Payment ID required' 
-    });
-  }
-  
   try {
-    // 1. Check from Firebase
-    const firebaseUrl = `https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/transactions/${payment_id}.json`;
+    // Apply CORS middleware
+    const middleware = require('./_middleware.js').default || (() => {});
+    middleware(req, res);
     
-    const response = await fetch(firebaseUrl);
-    const transactionData = await response.json();
+    console.log('🔍 Check Status Request:', {
+      method: req.method,
+      query: req.query,
+      origin: req.headers.origin
+    });
     
-    if (!transactionData) {
-      return res.status(404).json({ 
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+    
+    // Only GET allowed
+    if (req.method !== 'GET') {
+      return res.status(405).json({ 
         success: false, 
-        error: 'Transaction not found' 
+        error: 'Method not allowed. Use GET.' 
       });
     }
     
-    // 2. Check ESP32 status
-    let esp32Status = null;
-    let esp32Data = null;
+    const { payment_id } = req.query;
     
-    try {
-      const esp32Response = await fetch('https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/devices/WS-001.json');
-      esp32Data = await esp32Response.json();
-      
-      if (esp32Data) {
-        esp32Status = {
-          currentOrder: esp32Data.currentOrder,
-          fillProgress: esp32Data.fillProgress || 0,
-          relayActive: esp32Data.relayActive || false,
-          status: esp32Data.status || 'unknown'
-        };
-      }
-    } catch (espError) {
-      console.log('ESP32 status not available:', espError.message);
+    if (!payment_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing payment_id parameter',
+        example: '/api/check-status?payment_id=ORDER-12345'
+      });
     }
     
-    // 3. Response
-    res.status(200).json({
+    console.log('📊 Checking status for:', payment_id);
+    
+    // ========== 1. CHECK FIREBASE ==========
+    let transactionData = null;
+    let firebaseError = null;
+    
+    try {
+      const firebaseUrl = `https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/transactions/${payment_id}.json`;
+      const response = await fetch(firebaseUrl);
+      
+      if (response.ok) {
+        transactionData = await response.json();
+      } else {
+        firebaseError = `Firebase error: ${response.status}`;
+      }
+    } catch (error) {
+      firebaseError = error.message;
+      console.warn('⚠️ Firebase check error:', error.message);
+    }
+    
+    // ========== 2. CHECK ESP32 STATUS ==========
+    let esp32Status = null;
+    let deviceData = null;
+    
+    try {
+      const deviceUrl = 'https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/devices/WS-001.json';
+      const deviceResponse = await fetch(deviceUrl);
+      
+      if (deviceResponse.ok) {
+        deviceData = await deviceResponse.json();
+        
+        if (deviceData) {
+          esp32Status = {
+            currentOrder: deviceData.currentOrder || null,
+            fillProgress: deviceData.fillProgress || 0,
+            relayActive: deviceData.relayActive || false,
+            status: deviceData.status || 'unknown',
+            lastHeartbeat: deviceData.lastHeartbeat || null
+          };
+        }
+      }
+    } catch (deviceError) {
+      console.warn('⚠️ Device check error:', deviceError.message);
+    }
+    
+    // ========== 3. PREPARE RESPONSE ==========
+    const status = transactionData?.paymentStatus || 'NOT_FOUND';
+    const simulated = transactionData?.simulated || false;
+    
+    const response = {
       success: true,
       orderId: payment_id,
-      status: transactionData.paymentStatus || 'PENDING',
-      amount: transactionData.amount || 0,
-      volume: transactionData.volume || 0,
-      createdAt: transactionData.createdAt || Date.now(),
-      updatedAt: transactionData.updatedAt || Date.now(),
+      status: status,
+      amount: transactionData?.amount || 0,
+      volume: transactionData?.volume || 0,
+      createdAt: transactionData?.createdAt || Date.now(),
+      updatedAt: transactionData?.updatedAt || Date.now(),
+      simulated: simulated,
       esp32: esp32Status,
-      raw_esp32: esp32Data, // For debugging
-      firebase_connected: true,
+      device_connected: !!deviceData,
+      firebase_error: firebaseError,
+      message: getStatusMessage(status),
+      cors: true,
       timestamp: new Date().toISOString()
+    };
+    
+    console.log('✅ Status check complete:', { 
+      orderId: payment_id, 
+      status: status,
+      simulated: simulated 
     });
     
-  } catch (error) {
-    console.error('Check status error:', error);
+    return res.status(200).json(response);
     
-    res.status(500).json({ 
-      success: false, 
+  } catch (error) {
+    console.error('❌ Check status error:', error);
+    
+    return res.status(500).json({
+      success: false,
       error: error.message,
+      message: 'Internal server error checking status',
+      cors: true,
       timestamp: new Date().toISOString()
     });
   }
+}
+
+function getStatusMessage(status) {
+  const messages = {
+    'PENDING': 'Menunggu pembayaran',
+    'PAID': 'Pembayaran diterima',
+    'SUCCEEDED': 'Pembayaran berhasil',
+    'PROCESSING': 'Sedang diproses',
+    'COMPLETED': 'Selesai',
+    'EXPIRED': 'Pembayaran kadaluarsa',
+    'FAILED': 'Pembayaran gagal',
+    'NOT_FOUND': 'Transaksi tidak ditemukan'
+  };
+  
+  return messages[status] || status;
 }
