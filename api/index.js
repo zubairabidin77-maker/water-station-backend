@@ -1,16 +1,16 @@
-// api/index.js - LANDING PAGE API
+// api/index.js
 export default function handler(req, res) {
-  // CORS headers untuk frontend
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', 'https://water-station-zubair.web.app');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   
-  // Handle preflight requests
+  // Handle OPTIONS (preflight)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   
-  // Only allow GET requests
+  // Only GET for root
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -20,24 +20,11 @@ export default function handler(req, res) {
     message: "🚰 Water Station Backend API is Running",
     version: "2.0",
     timestamp: new Date().toISOString(),
-    endpoints: [
-      {
-        method: "POST",
-        path: "/api/create-payment",
-        description: "Create Xendit payment invoice"
-      },
-      {
-        method: "POST", 
-        path: "/api/webhook",
-        description: "Xendit webhook receiver"
-      },
-      {
-        method: "GET",
-        path: "/api/check-status",
-        description: "Check payment status"
-      }
-    ],
-    frontend_url: "https://water-station-zubair.web.app",
+    endpoints: {
+      create_payment: "POST /api/create-payment",
+      webhook: "POST /api/webhook",
+      check_status: "GET /api/check-status"
+    },
     cors_enabled: true
   });
 }
