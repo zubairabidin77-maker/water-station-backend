@@ -1,27 +1,14 @@
 {
   "name": "water-station-backend",
   "version": "2.0.0",
-  "description": "Backend API for Water Station with Xendit payment integration",
   "main": "api/index.js",
   "scripts": {
-    "start": "vercel dev",
-    "deploy": "vercel --prod",
-    "test": "echo \"No tests specified\" && exit 0"
+    "start": "vercel dev"
   },
   "dependencies": {
-    "xendit-node": "^2.15.1",
-    "node-fetch": "^2.6.7"
+    "xendit-node": "^2.15.1"
   },
   "engines": {
     "node": "18.x"
-  },
-  "keywords": [
-    "water-station",
-    "xendit",
-    "payment",
-    "esp32",
-    "firebase"
-  ],
-  "author": "Zubair",
-  "license": "MIT"
+  }
 }
