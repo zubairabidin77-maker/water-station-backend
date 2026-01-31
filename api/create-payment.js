@@ -1,4 +1,4 @@
-// api/create-payment.js - CREATE XENDIT PAYMENT
+// api/create-payment.js - FIXED CORS VERSION
 import Xendit from 'xendit-node';
 
 const xendit = new Xendit({
@@ -7,23 +7,51 @@ const xendit = new Xendit({
 const { Invoice } = xendit;
 
 export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', 'https://water-station-zubair.web.app');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // ==================== CORS HEADERS ====================
+  // Allow specific origin
+  const allowedOrigins = [
+    'https://water-station-zubair.web.app',
+    'https://water-station-zubair.firebaseapp.com',
+    'http://localhost:5000'
+  ];
   
-  // Handle preflight
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  // For development, you can use '*' but it's less secure
+  // res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-callback-token');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+  
+  // ==================== HANDLE OPTIONS (PREFLIGHT) ====================
   if (req.method === 'OPTIONS') {
+    console.log('CORS preflight request received');
     return res.status(200).end();
   }
   
-  // Only allow POST
+  // ==================== MAIN REQUEST HANDLER ====================
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ 
+      success: false, 
+      error: 'Method not allowed. Use POST.' 
+    });
   }
   
   try {
     const { external_id, amount, payer_email, description, volume } = req.body;
+    
+    // Log incoming request
+    console.log('🔵 Create Payment Request:', {
+      external_id,
+      amount,
+      volume,
+      origin: req.headers.origin
+    });
     
     // Validation
     if (!external_id || !amount || !volume) {
@@ -33,9 +61,7 @@ export default async function handler(req, res) {
       });
     }
     
-    console.log('Creating payment for:', { external_id, amount, volume });
-    
-    // 1. Save to Firebase first
+    // 1. Save to Firebase
     const firebaseUrl = `https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/transactions/${external_id}.json`;
     
     const transactionData = {
@@ -50,13 +76,13 @@ export default async function handler(req, res) {
       backend_received: true
     };
     
-    await fetch(firebaseUrl, {
+    const firebaseResponse = await fetch(firebaseUrl, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(transactionData)
     });
     
-    console.log('Saved to Firebase:', external_id);
+    console.log('✅ Saved to Firebase:', external_id);
     
     // 2. Create Xendit Invoice
     const invoice = new Invoice({});
@@ -69,6 +95,8 @@ export default async function handler(req, res) {
       currency: 'IDR',
       success_redirect_url: 'https://water-station-zubair.web.app/payment/success',
       failure_redirect_url: 'https://water-station-zubair.web.app/payment/failed',
+      // Add QRIS specifically
+      payment_methods: ['QRIS', 'OVO', 'DANA', 'LINKAJA', 'CREDIT_CARD'],
       items: [
         {
           name: `Air ${volume}ml`,
@@ -79,21 +107,27 @@ export default async function handler(req, res) {
       ],
       customer: {
         email: payer_email || 'customer@waterstation.com'
-      },
-      fees: [
-        {
-          type: 'ADMIN',
-          value: 0
-        }
-      ]
+      }
     };
     
-    console.log('Creating Xendit invoice:', invoiceData);
+    console.log('🔄 Creating Xendit invoice...');
     const createdInvoice = await invoice.createInvoice(invoiceData);
-    console.log('Xendit response:', createdInvoice.id);
+    console.log('✅ Xendit invoice created:', createdInvoice.id);
     
-    // 3. Response with all needed data
-    res.status(200).json({
+    // 3. Parse QR code from response
+    let qrCodeUrl = null;
+    if (createdInvoice.available_banks) {
+      const qrisBank = createdInvoice.available_banks.find(b => b.bank_code === 'QRIS');
+      if (qrisBank && qrisBank.qr_code) {
+        qrCodeUrl = qrisBank.qr_code;
+      }
+    }
+    
+    // Alternative: Generate QR from invoice URL
+    const invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(createdInvoice.invoice_url)}`;
+    
+    // 4. Send success response
+    return res.status(200).json({
       success: true,
       invoice_id: createdInvoice.id,
       invoice_url: createdInvoice.invoice_url,
@@ -101,19 +135,18 @@ export default async function handler(req, res) {
       amount: createdInvoice.amount,
       status: createdInvoice.status,
       external_id: createdInvoice.external_id,
-      // QR code from Xendit (if available)
-      qr_code: createdInvoice.available_banks?.find(b => b.bank_code === 'QRIS')?.qr_code || null,
-      // Alternative: generate QR from invoice_url
-      invoice_qr: `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(createdInvoice.invoice_url)}`,
+      qr_code: qrCodeUrl,
+      invoice_qr: invoiceQrUrl,
       message: 'Invoice created successfully',
       firebase_updated: true,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      cors_allowed: true
     });
     
   } catch (error) {
-    console.error('Create payment error:', error);
+    console.error('❌ Create payment error:', error);
     
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message,
       message: 'Failed to create payment',
