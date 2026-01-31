@@ -1,4 +1,4 @@
-// api/create-payment.js
+// api/create-payment.js - CREATE XENDIT PAYMENT
 import Xendit from 'xendit-node';
 
 const xendit = new Xendit({
@@ -7,15 +7,17 @@ const xendit = new Xendit({
 const { Invoice } = xendit;
 
 export default async function handler(req, res) {
-  // Set CORS headers
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', 'https://water-station-zubair.web.app');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
+  // Handle preflight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   
+  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -23,15 +25,17 @@ export default async function handler(req, res) {
   try {
     const { external_id, amount, payer_email, description, volume } = req.body;
     
-    // 1. Validasi input
+    // Validation
     if (!external_id || !amount || !volume) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Missing required fields' 
+        error: 'Missing required fields: external_id, amount, volume' 
       });
     }
     
-    // 2. Simpan ke Firebase dulu
+    console.log('Creating payment for:', { external_id, amount, volume });
+    
+    // 1. Save to Firebase first
     const firebaseUrl = `https://water-station-zubair-default-rtdb.asia-southeast1.firebasedatabase.app/transactions/${external_id}.json`;
     
     const transactionData = {
@@ -40,9 +44,10 @@ export default async function handler(req, res) {
       volume: volume,
       description: description || `Beli ${volume}ml air`,
       status: 'pending',
-      email: payer_email,
+      email: payer_email || 'customer@waterstation.com',
       createdAt: Date.now(),
-      paymentStatus: 'PENDING'
+      paymentStatus: 'PENDING',
+      backend_received: true
     };
     
     await fetch(firebaseUrl, {
@@ -51,7 +56,9 @@ export default async function handler(req, res) {
       body: JSON.stringify(transactionData)
     });
     
-    // 3. Buat invoice di Xendit
+    console.log('Saved to Firebase:', external_id);
+    
+    // 2. Create Xendit Invoice
     const invoice = new Invoice({});
     
     const invoiceData = {
@@ -60,8 +67,8 @@ export default async function handler(req, res) {
       payer_email: payer_email || 'customer@waterstation.com',
       description: description || `Pembayaran air ${volume}ml`,
       currency: 'IDR',
-      success_redirect_url: 'https://water-station-zubair.web.app/success',
-      failure_redirect_url: 'https://water-station-zubair.web.app/failed',
+      success_redirect_url: 'https://water-station-zubair.web.app/payment/success',
+      failure_redirect_url: 'https://water-station-zubair.web.app/payment/failed',
       items: [
         {
           name: `Air ${volume}ml`,
@@ -81,9 +88,11 @@ export default async function handler(req, res) {
       ]
     };
     
+    console.log('Creating Xendit invoice:', invoiceData);
     const createdInvoice = await invoice.createInvoice(invoiceData);
+    console.log('Xendit response:', createdInvoice.id);
     
-    // 4. Response dengan data invoice
+    // 3. Response with all needed data
     res.status(200).json({
       success: true,
       invoice_id: createdInvoice.id,
@@ -92,17 +101,23 @@ export default async function handler(req, res) {
       amount: createdInvoice.amount,
       status: createdInvoice.status,
       external_id: createdInvoice.external_id,
-      // Untuk QRIS
+      // QR code from Xendit (if available)
       qr_code: createdInvoice.available_banks?.find(b => b.bank_code === 'QRIS')?.qr_code || null,
-      message: 'Invoice created successfully'
+      // Alternative: generate QR from invoice_url
+      invoice_qr: `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(createdInvoice.invoice_url)}`,
+      message: 'Invoice created successfully',
+      firebase_updated: true,
+      timestamp: new Date().toISOString()
     });
     
   } catch (error) {
     console.error('Create payment error:', error);
+    
     res.status(500).json({
       success: false,
       error: error.message,
-      message: 'Failed to create payment'
+      message: 'Failed to create payment',
+      timestamp: new Date().toISOString()
     });
   }
 }
