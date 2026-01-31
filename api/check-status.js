@@ -1,4 +1,27 @@
-// api/check-status.js - CHECK PAYMENT STATUS
+// AWAL FILE - CORS MIDDLEWARE
+export default async function handler(req, res) {
+  // ========== CORS HEADERS ==========
+  const allowedOrigins = [
+    'https://water-station-zubair.web.app',
+    'https://water-station-zubair.firebaseapp.com',
+    'http://localhost:5000',
+    'http://localhost:3000'
+  ];
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-callback-token');
+  
+  // ========== HANDLE PREFLIGHT ==========
+  if (req.method === 'OPTIONS') {
+    console.log('🔄 OPTIONS preflight request');
+    return res.status(200).end();
+  }
+  // api/check-status.js - CHECK PAYMENT STATUS
 export default async function handler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', 'https://water-station-zubair.web.app');
